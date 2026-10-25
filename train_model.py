@@ -1,7 +1,3 @@
-import os
-# Prevent MLflow 3.x filestore warning on Windows/Docker
-os.environ["MLFLOW_ALLOW_FILE_STORE"] = "true"
-
 import pickle
 import pandas as pd
 import mlflow
@@ -52,9 +48,10 @@ X_train, X_test, y_train, y_test = train_test_split(
 )
 
 # ==========================================
-# 2. DEFINE MLFLOW EXPERIMENT
+# 2. CONFIGURE MLFLOW TRACKING (SQLite)
 # ==========================================
-# An Experiment is the folder/project that groups all related runs together
+# Use SQLite database to avoid Windows YAML file bugs
+mlflow.set_tracking_uri("sqlite:///mlflow.db")
 mlflow.set_experiment("House_Price_Prediction_Comparison")
 
 # Define 3 candidate models to compare
@@ -86,7 +83,6 @@ best_r2 = -float("inf")
 best_model = None
 
 for exp in experiments:
-    # with mlflow.start_run starts tracking a fresh trial
     with mlflow.start_run(run_name=exp["run_name"]):
         print(f"\n🚀 Training: {exp['run_name']}...")
         
@@ -99,33 +95,30 @@ for exp in experiments:
         mae = mean_absolute_error(y_test, preds)
         r2 = r2_score(y_test, preds)
 
-        # -----------------------------------------------
-        # MLFLOW LOGGING: 3 Core Pillars of MLflow Tracking
-        # -----------------------------------------------
-        # 1. Log Parameters (Inputs / Hyperparameters)
+        # 1. Log Hyperparameters
         mlflow.log_param("model_type", exp["model_type"])
         for param_name, param_val in exp["params"].items():
             mlflow.log_param(param_name, param_val)
         
-        # 2. Log Metrics (Outputs / Evaluation Scores)
+        # 2. Log Metrics
         mlflow.log_metric("mae", mae)
         mlflow.log_metric("r2_score", r2)
         
-        # 3. Log Model Artifact (Save the model file inside MLflow)
+        # 3. Log Scikit-learn Model Artifact
         mlflow.sklearn.log_model(model, artifact_path="model")
 
         print(f"   Logged -> MAE: ₹{mae:,.2f} | R²: {r2:.4f}")
 
-        # Keep track of the winning model for our Streamlit app
+        # Keep track of winner for Streamlit app
         if r2 > best_r2:
             best_r2 = r2
             best_model = model
 
 # ==========================================
-# 4. EXPORT THE BEST MODEL FOR STREAMLIT APP
+# 4. EXPORT WINNING MODEL FOR STREAMLIT APP
 # ==========================================
 with open("house_price_model.pkl", "wb") as f:
     pickle.dump(best_model, f)
 
-print("\n🏆 Successfully logged 3 runs to MLflow!")
+print("\n🏆 Successfully logged 3 runs to SQLite MLflow!")
 print(f"Saved winning model to house_price_model.pkl (Best R²: {best_r2:.4f})")

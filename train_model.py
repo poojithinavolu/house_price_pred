@@ -1,11 +1,21 @@
-import pandas as pd
-import pickle
+import os
+# Prevent MLflow 3.x filestore warning on Windows/Docker
+os.environ["MLFLOW_ALLOW_FILE_STORE"] = "true"
 
-from sklearn.linear_model import LinearRegression
+import pickle
+import pandas as pd
+import mlflow
+import mlflow.sklearn
+
 from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LinearRegression
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, r2_score
 
-# 1. Create sample house data
+# ==========================================
+# 1. PREPARE THE DATASET
+# ==========================================
 data = {
     "area": [
         500, 600, 750, 800, 900,
@@ -25,8 +35,6 @@ data = {
         5, 4, 6, 3, 4,
         3, 2, 3, 2, 1
     ],
-    # Sample prices in Indian rupees
-    # These are illustrative, not actual market prices.
     "price": [
         2000000, 2400000, 3000000, 3200000, 3500000,
         4000000, 4200000, 4700000, 5000000, 5200000,
@@ -36,32 +44,88 @@ data = {
 }
 
 df = pd.DataFrame(data)
-
-# 2. Separate features (X) and target (y)
 X = df[["area", "bedrooms", "age"]]
 y = df["price"]
 
-# 3. Split into training and testing datasets
 X_train, X_test, y_train, y_test = train_test_split(
     X, y, test_size=0.2, random_state=42
 )
 
-# 4. Create and train the Linear Regression model
-model = LinearRegression()
-model.fit(X_train, y_train)
+# ==========================================
+# 2. DEFINE MLFLOW EXPERIMENT
+# ==========================================
+# An Experiment is the folder/project that groups all related runs together
+mlflow.set_experiment("House_Price_Prediction_Comparison")
 
-# 5. Evaluate the model on unseen test data
-predictions = model.predict(X_test)
+# Define 3 candidate models to compare
+experiments = [
+    {
+        "run_name": "Run_1_LinearRegression",
+        "model_type": "LinearRegression",
+        "model": LinearRegression(),
+        "params": {"fit_intercept": True}
+    },
+    {
+        "run_name": "Run_2_DecisionTree",
+        "model_type": "DecisionTreeRegressor",
+        "model": DecisionTreeRegressor(max_depth=4, random_state=42),
+        "params": {"max_depth": 4, "criterion": "squared_error"}
+    },
+    {
+        "run_name": "Run_3_RandomForest",
+        "model_type": "RandomForestRegressor",
+        "model": RandomForestRegressor(n_estimators=50, max_depth=5, random_state=42),
+        "params": {"n_estimators": 50, "max_depth": 5}
+    }
+]
 
-mae = mean_absolute_error(y_test, predictions)
-r2 = r2_score(y_test, predictions)
+# ==========================================
+# 3. TRAIN & LOG ALL 3 RUNS IN MLFLOW
+# ==========================================
+best_r2 = -float("inf")
+best_model = None
 
-print("Model training completed!")
-print(f"Mean Absolute Error: ₹{mae:,.2f}")
-print(f"R² Score: {r2:.4f}")
+for exp in experiments:
+    # with mlflow.start_run starts tracking a fresh trial
+    with mlflow.start_run(run_name=exp["run_name"]):
+        print(f"\n🚀 Training: {exp['run_name']}...")
+        
+        # Train model
+        model = exp["model"]
+        model.fit(X_train, y_train)
+        
+        # Predict & Evaluate
+        preds = model.predict(X_test)
+        mae = mean_absolute_error(y_test, preds)
+        r2 = r2_score(y_test, preds)
 
-# 6. Save the trained model
-with open("house_price_model.pkl", "wb") as file:
-    pickle.dump(model, file)
+        # -----------------------------------------------
+        # MLFLOW LOGGING: 3 Core Pillars of MLflow Tracking
+        # -----------------------------------------------
+        # 1. Log Parameters (Inputs / Hyperparameters)
+        mlflow.log_param("model_type", exp["model_type"])
+        for param_name, param_val in exp["params"].items():
+            mlflow.log_param(param_name, param_val)
+        
+        # 2. Log Metrics (Outputs / Evaluation Scores)
+        mlflow.log_metric("mae", mae)
+        mlflow.log_metric("r2_score", r2)
+        
+        # 3. Log Model Artifact (Save the model file inside MLflow)
+        mlflow.sklearn.log_model(model, artifact_path="model")
 
-print("Model saved as house_price_model.pkl")
+        print(f"   Logged -> MAE: ₹{mae:,.2f} | R²: {r2:.4f}")
+
+        # Keep track of the winning model for our Streamlit app
+        if r2 > best_r2:
+            best_r2 = r2
+            best_model = model
+
+# ==========================================
+# 4. EXPORT THE BEST MODEL FOR STREAMLIT APP
+# ==========================================
+with open("house_price_model.pkl", "wb") as f:
+    pickle.dump(best_model, f)
+
+print("\n🏆 Successfully logged 3 runs to MLflow!")
+print(f"Saved winning model to house_price_model.pkl (Best R²: {best_r2:.4f})")
